@@ -17,8 +17,8 @@ class OpenSearchClient:
         self.hash_to_index_map = {}
         self.client = OpenSearch(
             hosts=[OPENSEARCH_URI],
-            use_ssl=False,
-            verify_certs=False,
+            use_ssl=OPENSEARCH_SSL,
+            verify_certs=OPENSEARCH_CERT_VERIFY,
             http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
         )
 
