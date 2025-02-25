@@ -16,8 +16,8 @@ class OpenSearchClient:
         self.index_prefix = "open_webui"
         self.client = OpenSearch(
             hosts=[OPENSEARCH_URI],
-            use_ssl=OPENSEARCH_SSL,
-            verify_certs=OPENSEARCH_CERT_VERIFY,
+            use_ssl=False,
+            verify_certs=False,
             http_auth=(OPENSEARCH_USERNAME, OPENSEARCH_PASSWORD),
         )
 
@@ -49,7 +49,7 @@ class OpenSearchClient:
             ids=ids, distances=distances, documents=documents, metadatas=metadatas
         )
 
-    def _create_index(self, index_name: str, dimension: int):
+    def _create_index(self, collection_name: str, dimension: int):
         body = {
             "mappings": {
                 "properties": {
@@ -57,7 +57,7 @@ class OpenSearchClient:
                     "vector": {
                         "type": "dense_vector",
                         "dims": dimension,  # Adjust based on your vector dimensions
-                        "index": true,
+                        "index": f"{self.index_prefix}_{collection_name}",
                         "similarity": "faiss",
                         "method": {
                             "name": "hnsw",
@@ -72,24 +72,24 @@ class OpenSearchClient:
                 }
             }
         }
-        self.client.indices.create(index=f"{self.index_prefix}_{index_name}", body=body)
+        self.client.indices.create(index=f"{self.index_prefix}_{collection_name}", body=body)
 
     def _create_batches(self, items: list[VectorItem], batch_size=100):
         for i in range(0, len(items), batch_size):
             yield items[i : i + batch_size]
 
-    def has_collection(self, index_name: str) -> bool:
+    def has_collection(self, collection_name: str) -> bool:
         # has_collection here means has index.
         # We are simply adapting to the norms of the other DBs.
-        return self.client.indices.exists(index=f"{self.index_prefix}_{index_name}")
+        return self.client.indices.exists(index=f"{self.index_prefix}_{collection_name}")
 
-    def delete_colleciton(self, index_name: str):
+    def delete_colleciton(self, collection_name: str):
         # delete_collection here means delete index.
         # We are simply adapting to the norms of the other DBs.
-        self.client.indices.delete(index=f"{self.index_prefix}_{index_name}")
+        self.client.indices.delete(index=f"{self.index_prefix}_{collection_name}")
 
     def search(
-        self, index_name: str, vectors: list[list[float]], limit: int
+        self, collection_name: str, vectors: list[list[float]], limit: int
     ) -> Optional[SearchResult]:
         query = {
             "size": limit,
@@ -108,7 +108,7 @@ class OpenSearchClient:
         }
 
         result = self.client.search(
-            index=f"{self.index_prefix}_{index_name}", body=query
+            index=f"{self.index_prefix}_{collection_name}", body=query
         )
 
         return self._result_to_search_result(result)
@@ -120,12 +120,18 @@ class OpenSearchClient:
             return None
 
         query_body = {
-            "query": {"bool": {"filter": []}},
+            "query": {
+                "bool": {
+                    "filter": []
+                }
+            },
             "_source": ["text", "metadata"],
         }
 
         for field, value in filter.items():
-            query_body["query"]["bool"]["filter"].append({"term": {field: value}})
+            query_body["query"]["bool"]["filter"].append({
+                "term": {field: value}
+            })
 
         size = limit if limit else 10
 
@@ -133,7 +139,7 @@ class OpenSearchClient:
             result = self.client.search(
                 index=f"{self.index_prefix}_{collection_name}",
                 body=query_body,
-                size=size,
+                size=size
             )
 
             return self._result_to_get_result(result)
@@ -141,21 +147,22 @@ class OpenSearchClient:
         except Exception as e:
             return None
 
-    def get_or_create_index(self, index_name: str, dimension: int):
-        if not self.has_index(index_name):
-            self._create_index(index_name, dimension)
 
-    def get(self, index_name: str) -> Optional[GetResult]:
+    def get_or_create_index(self, collection_name: str, dimension: int):
+        if not self.has_collection(collection_name):
+            self._create_index(collection_name, dimension)
+
+    def get(self, collection_name: str) -> Optional[GetResult]:
         query = {"query": {"match_all": {}}, "_source": ["text", "metadata"]}
 
         result = self.client.search(
-            index=f"{self.index_prefix}_{index_name}", body=query
+            index=f"{self.index_prefix}_{collection_name}", body=query
         )
         return self._result_to_get_result(result)
 
-    def insert(self, index_name: str, items: list[VectorItem]):
-        if not self.has_index(index_name):
-            self._create_index(index_name, dimension=len(items[0]["vector"]))
+    def insert(self, collection_name: str, items: list[VectorItem]):
+        if not self.has_collection(collection_name):
+            self._create_index(collection_name, dimension=len(items[0]["vector"]))
 
         for batch in self._create_batches(items):
             actions = [
@@ -173,9 +180,9 @@ class OpenSearchClient:
             ]
             self.client.bulk(actions)
 
-    def upsert(self, index_name: str, items: list[VectorItem]):
-        if not self.has_index(index_name):
-            self._create_index(index_name, dimension=len(items[0]["vector"]))
+    def upsert(self, collection_name: str, items: list[VectorItem]):
+        if not self.has_collection(collection_name):
+            self._create_index(collection_name, dimension=len(items[0]["vector"]))
 
         for batch in self._create_batches(items):
             actions = [
@@ -193,9 +200,9 @@ class OpenSearchClient:
             ]
             self.client.bulk(actions)
 
-    def delete(self, index_name: str, ids: list[str]):
+    def delete(self, collection_name: str, ids: list[str]):
         actions = [
-            {"delete": {"_index": f"{self.index_prefix}_{index_name}", "_id": id}}
+            {"delete": {"_index": f"{self.index_prefix}_{collection_name}", "_id": id}}
             for id in ids
         ]
         self.client.bulk(body=actions)
